@@ -294,7 +294,7 @@ jobs:
           git fetch origin $BASE_REF
 
           # Get version from base branch
-          BASE_VERSION=$(git show origin/$BASE_REF:package. json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
+          BASE_VERSION=$(git show origin/$BASE_REF:package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
 
           echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
           echo "Base branch version: $BASE_VERSION"

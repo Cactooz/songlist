@@ -33,7 +33,7 @@ jobs:
           ONLY_SONGS=true
 
           for file in $CHANGED_FILES; do
-            if [[ !  "$file" =~ ^songs/ ]]; then
+            if [[ !   "$file" =~ ^songs/ ]]; then
               ONLY_SONGS=false
               break
             fi
@@ -92,9 +92,9 @@ jobs:
             **Current version:** `${{ steps.current-version. outputs.version }}`
 
             **To bump the version, reply to this comment with:**
-            - `/version patch` → **Patch** (bug fix): `${{ steps.current-version. outputs.patch }}`
+            - `/version patch` → **Patch** (bug fix): `${{ steps.current-version.outputs.patch }}`
             - `/version minor` → **Minor** (enhancement/feature): `${{ steps.current-version.outputs.minor }}`
-            - `/version major` → **Major** (breaking change): `${{ steps.current-version. outputs.major }}`
+            - `/version major` → **Major** (breaking change): `${{ steps.current-version.outputs.major }}`
 
             Once you comment, the version will be automatically updated in `package.json`.
 
@@ -102,24 +102,51 @@ jobs:
 
   # Job 2: Process version bump command
   process-version-command:
-    if: |
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '/version')
+    # Remove the complex condition and just check event type
+    if: github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      issues: write
 
     steps:
+      - name: Check if comment is on PR and contains /version
+        id: check-trigger
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = !!context.payload.issue.pull_request;
+            const hasCommand = context.payload.comment.body.includes('/version');
+
+            console.log('Is PR:', isPR);
+            console.log('Has /version command:', hasCommand);
+            console.log('Comment body:', context.payload.comment. body);
+
+            return {
+              shouldRun: isPR && hasCommand,
+              isPR:  isPR,
+              hasCommand:  hasCommand
+            };
+
+      - name: Stop if not applicable
+        if: fromJson(steps.check-trigger. outputs.result).shouldRun == false
+        run: |
+          echo "Skipping:  This is not a PR comment with /version command"
+          echo "Is PR: ${{ fromJson(steps.check-trigger. outputs.result).isPR }}"
+          echo "Has command: ${{ fromJson(steps. check-trigger.outputs.result).hasCommand }}"
+          exit 0
+
       - name: Debug event payload
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true
         run: |
           echo "Event name: ${{ github.event_name }}"
           echo "Comment body: ${{ github.event. comment.body }}"
-          echo "Is PR: ${{ github.event. issue.pull_request != null }}"
-          echo "Comment author:  ${{ github.event.comment. user.login }}"
+          echo "Comment author: ${{ github.event. comment.user.login }}"
+          echo "Issue number: ${{ github.event. issue.number }}"
 
       - name: Get PR details
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true
         id: pr
         uses: actions/github-script@v7
         with:
@@ -132,12 +159,13 @@ jobs:
             return pr.data;
 
       - name: Check if user is authorized
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true
         id: check-auth
         uses: actions/github-script@v7
         with:
           script: |
             const commentAuthor = context.payload.comment.user.login;
-            const prAuthor = '${{ fromJson(steps.pr.outputs. result).user. login }}';
+            const prAuthor = '${{ fromJson(steps.pr. outputs.result).user.login }}';
 
             // Check if user is PR author
             if (commentAuthor === prAuthor) {
@@ -147,12 +175,12 @@ jobs:
             // Check if user has write/maintain/admin permission
             try {
               const permission = await github.rest.repos. getCollaboratorPermissionLevel({
-                owner: context.repo. owner,
-                repo: context. repo.repo,
+                owner: context. repo.owner,
+                repo: context.repo.repo,
                 username: commentAuthor
               });
               
-              const permLevel = permission. data.permission;
+              const permLevel = permission.data. permission;
               if (['write', 'maintain', 'admin'].includes(permLevel)) {
                 return { authorized: true, user: commentAuthor };
               }
@@ -163,13 +191,14 @@ jobs:
             return { authorized: false, user: commentAuthor };
 
       - name: Set auth output
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true
         id: auth
         run: |
-          echo "authorized=${{ fromJson(steps.check-auth. outputs.result).authorized }}" >> $GITHUB_OUTPUT
+          echo "authorized=${{ fromJson(steps.check-auth.outputs.result).authorized }}" >> $GITHUB_OUTPUT
           echo "user=${{ fromJson(steps.check-auth.outputs.result).user }}" >> $GITHUB_OUTPUT
 
       - name: React with thumbs down if unauthorized
-        if: steps.auth.outputs. authorized == 'false'
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'false'
         uses: actions/github-script@v7
         with:
           script: |
@@ -181,30 +210,30 @@ jobs:
             });
 
             await github.rest.issues.createComment({
-              owner: context.repo. owner,
-              repo: context. repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '⚠️ @${{ steps.auth.outputs.user }} - Only the PR author or repository maintainers can trigger version bumps.'
+              body: '⚠️ @${{ steps.auth.outputs. user }} - Only the PR author or repository maintainers can trigger version bumps.'
             });
 
       - name: Parse version command
-        if: steps. auth.outputs.authorized == 'true'
+        if: fromJson(steps.check-trigger.outputs. result).shouldRun == true && steps.auth.outputs.authorized == 'true'
         id: parse-command
         run: |
           COMMENT="${{ github.event.comment.body }}"
 
-          if echo "$COMMENT" | grep -iq "^/version major"; then
+          if echo "$COMMENT" | grep -iq "/version major"; then
             echo "type=major" >> $GITHUB_OUTPUT
-          elif echo "$COMMENT" | grep -iq "^/version minor"; then
+          elif echo "$COMMENT" | grep -iq "/version minor"; then
             echo "type=minor" >> $GITHUB_OUTPUT
-          elif echo "$COMMENT" | grep -iq "^/version patch"; then
+          elif echo "$COMMENT" | grep -iq "/version patch"; then
             echo "type=patch" >> $GITHUB_OUTPUT
           else
             echo "type=invalid" >> $GITHUB_OUTPUT
           fi
 
       - name: React with thumbs down if invalid command
-        if: steps.auth. outputs.authorized == 'true' && steps.parse-command.outputs.type == 'invalid'
+        if: fromJson(steps.check-trigger. outputs.result).shouldRun == true && steps.auth.outputs. authorized == 'true' && steps.parse-command.outputs.type == 'invalid'
         uses: actions/github-script@v7
         with:
           script: |
@@ -219,11 +248,11 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '⚠️ Invalid command.  Use `/version patch`, `/version minor`, or `/version major`.'
+              body: '⚠️ Invalid command. Use `/version patch`, `/version minor`, or `/version major`.'
             });
 
       - name: Checkout PR branch
-        if: steps. auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps. parse-command.outputs.type != 'invalid'
         uses: actions/checkout@v4
         with:
           ref: ${{ fromJson(steps.pr.outputs. result).head.ref }}
@@ -231,16 +260,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        if: steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid'
+        if: fromJson(steps.check-trigger. outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Bump version
-        if: steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid'
+        if: fromJson(steps.check-trigger.outputs. result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
         id: new-version
         run: |
-          BUMP_TYPE="${{ steps.parse-command.outputs.type }}"
+          BUMP_TYPE="${{ steps.parse-command. outputs.type }}"
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
           IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
@@ -267,7 +296,7 @@ jobs:
           echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Check if version changed
-        if: steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
         id: check-changes
         run: |
           if git diff --quiet package.json; then
@@ -277,31 +306,31 @@ jobs:
           fi
 
       - name: Commit version bump
-        if: steps.auth.outputs.authorized == 'true' && steps. parse-command.outputs.type != 'invalid' && steps.check-changes.outputs.changed == 'true'
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid' && steps.check-changes.outputs.changed == 'true'
         run: |
-          git config user. name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github. com"
-          git add package. json
-          git commit -m "chore: bump version to ${{ steps.new-version.outputs. new }}"
+          git config user.name "github-actions[bot]"
+          git config user. email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore: bump version to ${{ steps.new-version.outputs.new }}"
           git push
 
       - name: React with success and comment
-        if: steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid' && steps.check-changes.outputs.changed == 'true'
+        if: fromJson(steps.check-trigger.outputs.result).shouldRun == true && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid' && steps.check-changes.outputs.changed == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             // React with rocket to the command
             await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
+              owner: context.repo. owner,
+              repo: context. repo.repo,
+              comment_id: context.payload.comment. id,
               content: 'rocket'
             });
 
             // Post success comment
-            await github.rest.issues.createComment({
+            await github.rest. issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context. issue.number,
-              body: '✅ **Version bumped by @${{ steps.auth. outputs.user }}! ** `${{ steps.new-version.outputs.old }}` → `${{ steps.new-version.outputs.new }}`'
+              issue_number: context.issue.number,
+              body: '✅ **Version bumped by @${{ steps.auth.outputs. user }}! ** `${{ steps.new-version. outputs.old }}` → `${{ steps.new-version.outputs.new }}`'
             });

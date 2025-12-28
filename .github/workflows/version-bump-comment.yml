@@ -69,20 +69,26 @@ jobs:
           echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
           echo "Base branch version: $BASE_VERSION"
 
-      - name: Check if version already bumped
+      - name: Check if version already bumped in any commit
         if: steps.changed-files.outputs.any_changed == 'true'
         id: version-check
         run: |
-          CURRENT="${{ steps.version.outputs.version }}"
-          BASE="${{ steps.base-version.outputs.version }}"
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git fetch origin $BASE_REF
+          BASE_VERSION=$(git show origin/$BASE_REF:package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
+          COMMITS=$(git rev-list origin/$BASE_REF..HEAD)
 
-          if [ "$CURRENT" != "$BASE" ]; then
-            echo "already_bumped=true" >> $GITHUB_OUTPUT
-            echo "Version already bumped from $BASE to $CURRENT."
-          else
-            echo "already_bumped=false" >> $GITHUB_OUTPUT
-            echo "Version not bumped yet, still at $BASE."
-          fi
+          ALREADY_BUMPED=false
+          for COMMIT in $COMMITS; do
+            COMMIT_VERSION=$(git show $COMMIT:package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
+            if [ "$COMMIT_VERSION" != "$BASE_VERSION" ]; then
+              ALREADY_BUMPED=true
+              echo "Version already bumped in commit $COMMIT: $BASE_VERSION -> $COMMIT_VERSION"
+              break
+            fi
+          done
+
+          echo "already_bumped=$ALREADY_BUMPED" >> $GITHUB_OUTPUT
 
       - name: Check for existing bot comment
         if: steps.changed-files.outputs.any_changed == 'true' || steps.version-check.outputs.already_bumped == 'false'

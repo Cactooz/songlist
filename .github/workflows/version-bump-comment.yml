@@ -32,18 +32,14 @@ jobs:
         run: |
           echo "Changed files: ${{ steps.changed-files.outputs.all_changed_files }}"
 
-      - name: Exit early if only songs changed
-        if: steps.changed-files.outputs.any_changed != 'true'
-        run: |
-          echo "Only songs changed, no version bump needed."
-          exit 0
-
       - name: Setup Node.js ${{ matrix.node-version }}
+        if: steps.changed-files.outputs.any_changed == 'true'
         uses: actions/setup-node@v6.1.0
         with:
           node-version: ${{ matrix.node-version }}
 
       - name: Get current version number
+        if: steps.changed-files.outputs.any_changed == 'true'
         id: version
         run: |
           CURRENT_VERSION=$(node -p "require('./package.json').version")
@@ -63,6 +59,7 @@ jobs:
           echo "major=$MAJOR_VERSION" >> $GITHUB_OUTPUT
 
       - name: Get base branch version
+        if: steps.changed-files.outputs.any_changed == 'true'
         id: base-version
         run: |
           BASE_REF="${{ github.event.pull_request.base.ref }}"
@@ -73,6 +70,7 @@ jobs:
           echo "Base branch version: $BASE_VERSION"
 
       - name: Check if version already bumped
+        if: steps.changed-files.outputs.any_changed == 'true'
         id: version-check
         run: |
           CURRENT="${{ steps.version.outputs.version }}"
@@ -86,13 +84,8 @@ jobs:
             echo "Version not bumped yet, still at $BASE."
           fi
 
-      - name: Exit if version already bumped
-        if: steps.version-check.outputs.already_bumped == 'true'
-        run: |
-          echo "Version has already been bumped. No action needed."
-          exit 0
-
       - name: Check for existing bot comment
+        if: steps.changed-files.outputs.any_changed == 'true' || steps.version-check.outputs.already_bumped == 'false'
         id: comment
         uses: peter-evans/find-comment@v4.0.0
         with:
@@ -101,6 +94,7 @@ jobs:
           body-includes: 'Version Bump Required'
 
       - name: Create or update comment
+        if: steps.changed-files.outputs.any_changed == 'true' || steps.version-check.outputs.already_bumped == 'false'
         uses: peter-evans/create-or-update-comment@v5.0.0
         with:
           comment-id: ${{ steps.comment.outputs.comment-id }}

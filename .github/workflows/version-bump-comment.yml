@@ -1,0 +1,116 @@
+name: Version Bump Comment
+
+on:
+  pull_request:
+
+jobs:
+  request-version-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      matrix:
+        node-version: [24]
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Check if files other than songs folder changed
+        id: changed-files
+        uses: tj-actions/changed-files@v47.0.1
+        with:
+          files: |
+            !songs/**
+            !dist/**
+
+      - name: Exit early if only songs changed
+        if: steps.changed-files.outputs.any_changed != 'true'
+        run: |
+          echo "Only songs changed, no version bump needed."
+          exit 0
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v6.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Get current version number
+        id: version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+
+          PATCH_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+          MINOR_VERSION="$MAJOR.$((MINOR + 1)).0"
+          MAJOR_VERSION="$((MAJOR + 1)).0.0"
+
+          echo "patch=$PATCH_VERSION" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR_VERSION" >> $GITHUB_OUTPUT
+          echo "major=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get base branch version
+        id: base-version
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git fetch origin $BASE_REF
+
+          BASE_VERSION=$(git show origin/$BASE_REF:package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
+          echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "Base branch version: $BASE_VERSION"
+
+      - name: Check if version already bumped
+        id: version-check
+        run: |
+          CURRENT="${{ steps.version.outputs.version }}"
+          BASE="${{ steps.base-version.outputs.version }}"
+
+          if [ "$CURRENT" != "$BASE" ]; then
+            echo "already_bumped=true" >> $GITHUB_OUTPUT
+            echo "Version already bumped from $BASE to $CURRENT."
+          else
+            echo "already_bumped=false" >> $GITHUB_OUTPUT
+            echo "Version not bumped yet, still at $BASE."
+          fi
+
+      - name: Exit if version already bumped
+        if: steps.version-check.outputs.already_bumped == 'true'
+        run: |
+          echo "Version has already been bumped. No action needed."
+          exit 0
+
+      - name: Check for existing bot comment
+        id: comment
+        uses: peter-evans/find-comment@v4.0.0
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'Version Bump Required'
+
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v5.0.0
+        with:
+          comment-id: ${{ steps.comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            ## Version Bump Required
+
+            This PR contains changes to other files than songs and requires a version bump. 
+
+            To bump the version current version (`${{ steps.version.outputs.version }}`), comment with:
+            - `/version patch` → **Patch** (bug fix): `${{ steps.version.outputs.patch }}`
+            - `/version minor` → **Minor** (enhancement/feature): `${{ steps.version.outputs.minor }}`
+            - `/version major` → **Major** (breaking change): `${{ steps.version.outputs.major }}`
+
+            Once commented, the version will be automatically updated in `package.json`.  
+            _Only the PR author and repository maintainers can trigger the version bump._

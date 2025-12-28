@@ -112,6 +112,7 @@ jobs:
         run: exit 1
 
       - name: Checkout PR branch
+        if: steps.comment.outputs.comment-id != ''
         uses: actions/checkout@v6.0.1
         with:
           ref: ${{ fromJson(steps.pr.outputs.result).head.ref }}
@@ -120,6 +121,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node-version }}
+        if: steps.comment.outputs.comment-id != ''
         uses: actions/setup-node@v6.1.0
         with:
           node-version: ${{ matrix.node-version }}

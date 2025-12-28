@@ -180,7 +180,7 @@ jobs:
           git commit -m "Bump version to ${{ steps.new-version.outputs.new }}"
           git push
 
-      - name: React with success and comment
+      - name: Comment successful version bump
         uses: actions/github-script@v8.0.0
         with:
           script: |

@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  request-version-bump:
+  version-bump-comment:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,6 +27,10 @@ jobs:
           files: |
             !songs/**
             !dist/**
+
+      - name: Debug changed files
+        run: |
+          echo "Changed files: ${{ steps.changed-files.outputs.all_changed_files }}"
 
       - name: Exit early if only songs changed
         if: steps.changed-files.outputs.any_changed != 'true'

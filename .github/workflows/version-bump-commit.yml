@@ -5,7 +5,7 @@ on:
     types: [created]
 
 jobs:
-  process-version-command:
+  version-command-commit:
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '/version')

@@ -27,7 +27,7 @@ describe('All songs have valid data', () => {
 			});
 		});
 	});
-
+	console.log('object');
 	test('All metadata are valid format', () => {
 		const songs = getAllSongs(false);
 

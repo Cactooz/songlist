@@ -18,6 +18,7 @@ describe('All IDs are valid', () => {
 		});
 	});
 
+	console.log('test');
 	test('All files have unique IDs', () => {
 		const songs = getAllSongs(false);
 		const ids: Record<number, number> = {};

@@ -13,6 +13,7 @@ describe('All files in songs folder are songs', () => {
 		});
 	});
 });
+console.log('object');
 
 describe('All songs have valid data', () => {
 	test('No files have additional metadata', () => {

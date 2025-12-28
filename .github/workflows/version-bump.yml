@@ -1,0 +1,227 @@
+name: Auto Version Bump
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  # Job 1: Comment on PR asking for version bump type
+  request-version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with: 
+          ref: ${{ github. event.pull_request.head. ref }}
+          fetch-depth: 0
+
+      - name: Get changed files
+        id:  changed-files
+        uses: tj-actions/changed-files@v44
+
+      - name: Check if only songs folder changed
+        id:  check-songs-only
+        run: |
+          CHANGED_FILES="${{ steps.changed-files. outputs. all_changed_files }}"
+          ONLY_SONGS=true
+          
+          for file in $CHANGED_FILES; do
+            if [[ !  "$file" =~ ^songs/ ]]; then
+              ONLY_SONGS=false
+              break
+            fi
+          done
+          
+          echo "only_songs=$ONLY_SONGS" >> $GITHUB_OUTPUT
+
+      - name:  Setup Node.js
+        if: steps.check-songs-only.outputs.only_songs == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get current version
+        if: steps.check-songs-only.outputs.only_songs == 'false'
+        id: current-version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          
+          IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+          
+          PATCH_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+          MINOR_VERSION="$MAJOR.$((MINOR + 1)).0"
+          MAJOR_VERSION="$((MAJOR + 1)).0.0"
+          
+          echo "patch=$PATCH_VERSION" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR_VERSION" >> $GITHUB_OUTPUT
+          echo "major=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check for existing bot comment
+        if: steps.check-songs-only.outputs.only_songs == 'false'
+        id: find-comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event. pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '📦 Version Bump Required'
+
+      - name: Create or update comment
+        if: steps.check-songs-only.outputs.only_songs == 'false'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            ## 📦 Version Bump Required
+            
+            This PR contains changes outside the `/songs` folder and requires a version bump.
+            
+            **Current version:** `${{ steps.current-version. outputs.version }}`
+            
+            Please react to this comment with the appropriate emoji to indicate the version bump type: 
+            
+            - 🐛 **`:bug:`** → Patch version (bug fix): `${{ steps.current-version.outputs.patch }}`
+            - ✨ **`:sparkles:`** → Minor version (enhancement/feature): `${{ steps.current-version.outputs.minor }}`
+            - 💥 **`:boom:`** → Major version (breaking change): `${{ steps.current-version.outputs.major }}`
+            
+            Once you react, the version will be automatically updated in `package.json`.
+
+  # Job 2: Process reaction and bump version
+  process-reaction: 
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '📦 Version Bump Required')
+    runs-on: ubuntu-latest
+    permissions: 
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github. rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return pr.data;
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(steps.pr.outputs. result).head.ref }}
+          repository: ${{ fromJson(steps. pr.outputs.result).head.repo.full_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get reactions
+        id: reactions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const reactions = await github.rest.reactions.listForIssueComment({
+              owner: context. repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment. id
+            });
+            
+            const prAuthor = '${{ fromJson(steps.pr.outputs. result).user.login }}';
+            const authorReactions = reactions.data.filter(r => r.user.login === prAuthor);
+            
+            const hasBug = authorReactions.some(r => r.content === '+1' || r.content === 'bug');
+            const hasSparkles = authorReactions.some(r => r.content === 'rocket' || r.content === 'eyes');
+            const hasBoom = authorReactions.some(r => r.content === 'heart' || r.content === 'hooray');
+            
+            let bumpType = 'none';
+            if (hasBoom) bumpType = 'major';
+            else if (hasSparkles) bumpType = 'minor';
+            else if (hasBug) bumpType = 'patch';
+            
+            return bumpType;
+
+      - name: Determine bump type
+        id: bump-type
+        run: |
+          BUMP_TYPE='${{ steps.reactions.outputs.result }}'
+          echo "type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "📦 Detected bump type: $BUMP_TYPE"
+
+      - name: Bump version
+        if: steps.bump-type.outputs.type != 'none'
+        id:  new-version
+        run: |
+          BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
+          CURRENT_VERSION=$(node -p "require('./package. json').version")
+          
+          IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+          
+          if [ "$BUMP_TYPE" = "major" ]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [ "$BUMP_TYPE" = "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif [ "$BUMP_TYPE" = "patch" ]; then
+            PATCH=$((PATCH + 1))
+          fi
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
+          npm version $NEW_VERSION --no-git-tag-version
+          
+          echo "old=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name:  Check if version changed
+        if: steps.bump-type.outputs.type != 'none'
+        id: check-changes
+        run: |
+          if git diff --quiet package.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name:  Commit version bump
+        if: steps.bump-type.outputs.type != 'none' && steps.check-changes. outputs.changed == 'true'
+        run: |
+          git config user. name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github. com"
+          git add package. json
+          git commit -m "chore: bump version to ${{ steps.new-version. outputs.new }}"
+          git push
+
+      - name: Update comment with success
+        if: steps.bump-type.outputs.type != 'none' && steps.check-changes.outputs.changed == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with: 
+          comment-id: ${{ github.event.comment.id }}
+          edit-mode: append
+          body: |
+            
+            ---
+            ✅ **Version bumped! ** `${{ steps.new-version. outputs.old }}` → `${{ steps.new-version.outputs.new }}`

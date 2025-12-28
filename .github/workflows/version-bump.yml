@@ -33,7 +33,7 @@ jobs:
           ONLY_SONGS=true
 
           for file in $CHANGED_FILES; do
-            if [[ !    "$file" =~ ^songs/ ]]; then
+            if [[ ! "$file" =~ ^songs/ ]]; then
               ONLY_SONGS=false
               break
             fi
@@ -89,7 +89,7 @@ jobs:
 
             This PR contains changes outside the `/songs` folder and requires a version bump.
 
-            **Current version:** `${{ steps.current-version. outputs.version }}`
+            **Current version:** `${{ steps.current-version.outputs.version }}`
 
             **To bump the version, reply to this comment with:**
             - `/version patch` → **Patch** (bug fix): `${{ steps.current-version.outputs.patch }}`
@@ -130,7 +130,7 @@ jobs:
           echo "Event name: ${{ github.event_name }}"
           echo "Comment body: ${{ github.event.comment.body }}"
           echo "Comment author: ${{ github.event.comment.user.login }}"
-          echo "Issue number:  ${{ github.event.issue.number }}"
+          echo "Issue number: ${{ github.event.issue.number }}"
 
       - name: Get PR details
         if: steps.check-trigger.outputs.should_run == 'true'
@@ -138,10 +138,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const pr = await github.rest. pulls.get({
+            const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context. issue.number
+              pull_number: context.issue.number
             });
             return pr.data;
 
@@ -162,12 +162,12 @@ jobs:
             // Check if user has write/maintain/admin permission
             try {
               const permission = await github.rest.repos. getCollaboratorPermissionLevel({
-                owner: context.repo.owner,
-                repo: context.repo. repo,
+                owner: context. repo.owner,
+                repo: context.repo.repo,
                 username: commentAuthor
               });
               
-              const permLevel = permission.data. permission;
+              const permLevel = permission.data.permission;
               if (['write', 'maintain', 'admin'].includes(permLevel)) {
                 return { authorized: true, user: commentAuthor };
               }
@@ -192,13 +192,13 @@ jobs:
             await github.rest.reactions.createForIssueComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              comment_id: context.payload.comment. id,
+              comment_id: context.payload.comment.id,
               content: '-1'
             });
 
             await github.rest.issues.createComment({
-              owner: context.repo. owner,
-              repo: context. repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.issue.number,
               body: '⚠️ @${{ steps.auth.outputs. user }} - Only the PR author or repository maintainers can trigger version bumps.'
             });
@@ -231,7 +231,7 @@ jobs:
               content: '-1'
             });
 
-            await github.rest. issues.createComment({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
@@ -245,6 +245,7 @@ jobs:
           ref: ${{ fromJson(steps.pr.outputs. result).head.ref }}
           repository: ${{ fromJson(steps. pr.outputs.result).head.repo.full_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
@@ -252,14 +253,60 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Bump version
-        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
+      - name: Check for existing version bump commit
+        if: steps. check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
+        id: check-existing
+        run: |
+          # Check if there's already a version bump commit by the bot
+          BUMP_COMMIT=$(git log --author="github-actions\[bot\]" --grep="^chore: bump version to" --format="%H" -n 1)
+
+          if [ -n "$BUMP_COMMIT" ]; then
+            echo "existing_commit=$BUMP_COMMIT" >> $GITHUB_OUTPUT
+            echo "has_existing=true" >> $GITHUB_OUTPUT
+            echo "Found existing version bump commit:  $BUMP_COMMIT"
+          else
+            echo "has_existing=false" >> $GITHUB_OUTPUT
+            echo "No existing version bump commit found"
+          fi
+
+      - name: Reset to remove existing version bump
+        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth. outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid' && steps.check-existing.outputs. has_existing == 'true'
+        run: |
+          echo "Removing existing version bump commit(s)"
+
+          # Find the commit before the version bump
+          BUMP_COMMIT="${{ steps.check-existing.outputs.existing_commit }}"
+          PARENT_COMMIT=$(git rev-parse ${BUMP_COMMIT}^)
+
+          # Reset to the parent commit (before version bump)
+          git reset --hard $PARENT_COMMIT
+
+          echo "Reset to commit: $PARENT_COMMIT"
+
+      - name: Get base branch version
+        if: steps. check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
+        id: base-version
+        run: |
+          # Get the base branch name
+          BASE_REF="${{ fromJson(steps.pr. outputs.result).base.ref }}"
+
+          # Fetch the base branch
+          git fetch origin $BASE_REF
+
+          # Get version from base branch
+          BASE_VERSION=$(git show origin/$BASE_REF:package. json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8')).version")
+
+          echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "Base branch version: $BASE_VERSION"
+
+      - name: Calculate new version
+        if: steps. check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
         id: new-version
         run: |
-          BUMP_TYPE="${{ steps.parse-command. outputs.type }}"
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          BUMP_TYPE="${{ steps.parse-command.outputs.type }}"
+          BASE_VERSION="${{ steps.base-version.outputs.version }}"
 
-          IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
+          IFS='.' read -r -a VERSION_PARTS <<< "$BASE_VERSION"
           MAJOR="${VERSION_PARTS[0]}"
           MINOR="${VERSION_PARTS[1]}"
           PATCH="${VERSION_PARTS[2]}"
@@ -277,32 +324,36 @@ jobs:
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 
-          npm version $NEW_VERSION --no-git-tag-version
-
-          echo "old=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "old=$BASE_VERSION" >> $GITHUB_OUTPUT
           echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Calculated new version: $BASE_VERSION → $NEW_VERSION"
 
-      - name: Check if version changed
-        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
-        id: check-changes
+      - name: Update package.json version
+        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid'
         run: |
-          if git diff --quiet package.json; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
+          NEW_VERSION="${{ steps.new-version.outputs.new }}"
+          npm version $NEW_VERSION --no-git-tag-version
+          echo "Updated package.json to version $NEW_VERSION"
 
-      - name: Commit version bump
-        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid' && steps.check-changes.outputs.changed == 'true'
+      - name: Commit and push version bump
+        if: steps.check-trigger.outputs.should_run == 'true' && steps. auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid'
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply. github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json
-          git commit -m "chore: bump version to ${{ steps.new-version.outputs.new }}"
-          git push
+          git commit -m "chore: bump version to ${{ steps.new-version.outputs. new }}"
+
+          # Force push if we removed an existing commit
+          if [ "${{ steps.check-existing.outputs. has_existing }}" = "true" ]; then
+            echo "Force pushing to replace previous version bump"
+            git push --force-with-lease
+          else
+            echo "Pushing new version bump"
+            git push
+          fi
 
       - name: React with success and comment
-        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command.outputs.type != 'invalid' && steps.check-changes. outputs.changed == 'true'
+        if: steps.check-trigger.outputs.should_run == 'true' && steps.auth.outputs.authorized == 'true' && steps.parse-command. outputs.type != 'invalid'
         uses: actions/github-script@v7
         with:
           script: |
@@ -314,10 +365,15 @@ jobs:
               content: 'rocket'
             });
 
+            const wasReplaced = '${{ steps.check-existing.outputs.has_existing }}' === 'true';
+            const message = wasReplaced 
+              ? '✅ **Version bump updated by @${{ steps.auth.outputs. user }}! ** `${{ steps.new-version. outputs.old }}` → `${{ steps.new-version.outputs.new }}`\n\n_Previous version bump was replaced._'
+              : '✅ **Version bumped by @${{ steps.auth.outputs.user }}!** `${{ steps.new-version.outputs. old }}` → `${{ steps.new-version.outputs.new }}`';
+
             // Post success comment
             await github.rest. issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '✅ **Version bumped by @${{ steps.auth.outputs.user }}! ** `${{ steps.new-version.outputs.old }}` → `${{ steps.new-version.outputs.new }}`'
+              body: message
             });

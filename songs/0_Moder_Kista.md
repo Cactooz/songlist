@@ -18,6 +18,7 @@ notes:
 tags: [gasque, swe]
 ---
 
+sångändring
 Ack för Kista brinner våra hjärtan,
 centrum för vår I-Teknologi.
 Alla sorger sopas under mattan,
